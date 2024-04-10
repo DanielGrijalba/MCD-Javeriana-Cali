@@ -1,0 +1,226 @@
+def balance_and_train_multiple_models(df, balance_ratio, balancing_method):
+    
+    
+    # Particion dataframe de test y train
+    train_df, test_df = train_test_split(df, test_size=0.3, random_state=42)
+
+    X_train = train_df.drop('target', axis=1)
+    y_train = train_df['target']
+    X_test = test_df.drop('target', axis=1)
+    y_test = test_df['target']
+    
+    
+
+    if balancing_method == 'over':
+        oversampler = RandomOverSampler(sampling_strategy = balance_ratio,
+                                        random_state=42)
+        X_train_resampled, y_train_resampled = oversampler.fit_resample(X_train, y_train)
+        
+    elif balancing_method == 'under':
+        undersampler = RandomUnderSampler(sampling_strategy = balance_ratio,
+                                          random_state=42)
+        X_train_resampled, y_train_resampled = undersampler.fit_resample(X_train, y_train)
+        
+    elif balancing_method == 'smote':
+        smote = SMOTE(sampling_strategy = balance_ratio,
+                      random_state=42)
+        X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
+        
+    elif balancing_method == 'ninguno':
+        X_train_resampled = X_train.copy()
+        y_train_resampled = y_train.copy()
+        
+        
+    tasa_target = round(y_train.value_counts(normalize=True)[1],2)
+    tasa_target_resam = round(y_train_resampled.value_counts(normalize=True)[1],2)
+    
+    
+    param_scale_pos = np.ceil(y_train_resampled.shape[0] / y_train_resampled.sum()).astype(int)
+    param_scale_pos
+
+    models = [
+        ('XGBoost', xgb.XGBClassifier(objective= 'binary:logistic', seed=42, scale_pos_weight = param_scale_pos)),
+        ('Random Forest', RandomForestClassifier(random_state=42, class_weight='balanced')),
+        ('Decision Tree', DecisionTreeClassifier(random_state=42, class_weight='balanced')),
+        ('Logistic Regression', LogisticRegression(random_state=42, class_weight='balanced', max_iter = 1000))
+    ]
+    
+    scoring = {'balanced_accuracy': 'balanced_accuracy',
+               'recall': 'recall',
+               'f1':'f1',
+               'neg_log_loss': 'neg_log_loss',
+               'precision': 'precision'}
+
+    results = [] #lista para almacenar los resultados de los modelos
+    selected_features = []  # Lista para almacenar las variables seleccionadas
+    parameters = []  # Lista para almacenar los parámetros
+    
+    for model_name, base_model in models:
+        if model_name == 'XGBoost':
+            param_dist = {
+                'max_depth': range (1, 200, 5),
+                'n_estimators': range(10, 500,20),
+                'learning_rate': np.arange(0,0.55,0.05),
+                'min_child_weight' : range (10, 550, 20),
+                'subsample': np.arange(0,1,0.025),
+                'gamma':  np.arange(0,1,0.05),
+                'colsample_bytree':np.arange(0.3,0.7,0.05)    
+            }
+            
+            
+            model = RandomizedSearchCV(base_model,
+                                       param_distributions=param_dist,
+                                       n_iter=100,
+                                       scoring = scoring, 
+                                       refit='balanced_accuracy',
+                                       n_jobs=-1,
+                                       cv=20,
+                                       random_state=42)
+            
+        elif model_name == 'Random Forest':
+            param_dist = {
+                'n_estimators'      : np.arange(5,500,20),
+                'min_samples_split' : [2, 4, 6,8, 10, 15, 20, 30, 40],   
+                'min_samples_leaf'  : [10, 30, 60, 90, 100, 150, 200],
+                'max_features'      : ['sqrt','auto',0.25, 0.3, 0.5, 0.75, 1.0],
+                'max_depth'         : range (1, 300, 5),
+                'bootstrap'         : [True, False],
+                'criterion'          :['gini', 'entropy']
+            }
+            model = RandomizedSearchCV(base_model,
+                                       param_distributions=param_dist,
+                                       n_iter=100,
+                                       #scoring='f1',
+                                       refit = 'balanced_accuracy',
+                                       n_jobs=-1,
+                                       cv=20,
+                                       random_state=42)
+            
+        elif model_name == 'Decision Tree':
+            param_dist = {
+                'ccp_alpha':np.arange(0,1,0.02),           
+                'min_samples_split': [ 10, 15, 20, 30, 40],
+                'max_features': ['sqrt','auto',0.4,0.45, 0.5, 0.55,0.6,0.65, 0.75, 1.0],
+                'max_depth': range (1, 300, 5)
+            }
+            model = RandomizedSearchCV(base_model,
+                                       param_distributions=param_dist,
+                                       n_iter=100,
+                                       #scoring='f1',
+                                       refit = 'balanced_accuracy',
+                                       n_jobs=-1,
+                                       cv=20,
+                                       random_state=42)
+            
+        elif model_name == 'Logistic Regression':
+            param_dist = {
+                'penalty': ['l1', 'l2'],
+                'C': [0.001, 0.01, 0.1, 1],
+                'tol': [0.000001,0.00001,0.0001,0.001, 0.01, 0.1, 1],
+                'solver': ['liblinear'],
+            }
+            model = RandomizedSearchCV(base_model,
+                                       param_distributions=param_dist,
+                                       n_iter=10,
+                                       scoring='balanced_accuracy',
+                                       n_jobs=-1,
+                                       cv=20,
+                                       random_state=42)
+
+
+        
+        
+        # Ajusa modelo 1
+        
+        
+        # Usar el modelo ajustado para la selección de características
+        selector = SelectFromModel(estimator = base_model)
+        selector.fit(X_train_resampled, y_train_resampled)
+        
+        X_train_selected = selector.transform(X_train_resampled)
+        X_test_selected  = selector.transform(X_test)
+        
+        # variables seleccionadas
+        selected_features = list(X_train_resampled.columns[selector.get_support()])
+        
+        # Entrenar y evaluar el modelo con las características seleccionadas
+        model.fit(X_train_selected, y_train_resampled)
+        
+        # Obtener los mejores parámetros
+        parameters = model.best_params_ if hasattr(model, 'best_params_') else None
+
+        
+        
+        y_t_prob = model.predict_proba(X_train_selected)
+        y_t_prob = pd.DataFrame(y_t_prob[:, 1]).iloc[:,0]
+            
+        y_pred = model.predict(X_test_selected)
+        y_prob = model.predict_proba(X_test_selected)
+        y_prob = pd.DataFrame(y_prob[:, 1]).iloc[:,0]
+            
+        
+        #Metricas
+        
+        accuracy  = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred)
+        recall    = recall_score(y_test, y_pred)
+        f1        = f1_score(y_test, y_pred)
+        auc_score = roc_auc_score(y_test, y_prob)
+        
+        #punto de corte
+        threshold = Find_Optimal_Cutoff(y_train_resampled, y_t_prob)
+        
+        y_pred_pc = np.where(y_prob > threshold, 1, 0)
+        
+        accuracy_pc  = accuracy_score(y_test, y_pred_pc)
+        precision_pc = precision_score(y_test, y_pred_pc)
+        recall_pc    = recall_score(y_test, y_pred_pc)
+        f1_pc        = f1_score(y_test, y_pred_pc)
+
+
+        
+        results.append({
+            'Model'          : model_name,
+            'Balance_Method' : balancing_method,
+            'Balance_Ratio'  : balance_ratio,
+            'Target_Ratio'   : tasa_target,
+            'New_Target_Ratio'   : tasa_target_resam,
+            
+            'Accuracy'       : accuracy,
+            'Precision'      : precision,
+            'Recall'         : recall,
+            'F1_Score'       : f1,
+            'AUC'            : auc_score,
+            'Threshold'      : threshold,
+            'Accuracy_Th'    : accuracy_pc,
+            'Precision_Th'   : precision_pc,
+            'Recall_Th'      : recall_pc,
+            'F1_Score_Th'    : f1_pc,
+            'Variables'      : selected_features,
+            'Parametros'     : parameters
+        })
+
+    result_df = pd.DataFrame(results)
+    return result_df
+
+
+# Define las tasas de balanceo que deseas probar
+balance_ratios = [0.2,0.25,0.3]
+
+# Define los métodos de balanceo que deseas probar
+balancing_methods = ['over', 'under', 'smote']
+
+# Crea una lista para almacenar los resultados de todas las combinaciones
+all_results = []
+
+
+# Itera sobre las tasas de balanceo y los métodos de balanceo
+for balance_ratio in balance_ratios:
+    for balancing_method in balancing_methods:
+        # Llama a la función balance_and_train_multiple_models
+        results_1 = balance_and_train_multiple_models(df_selecc, balance_ratio, balancing_method)
+        # Agrega los resultados a la lista
+        all_results.append(results_1)
+
+# Combina todos los resultados en un solo DataFrame
+final_results_1 = pd.concat(all_results, ignore_index=True)
